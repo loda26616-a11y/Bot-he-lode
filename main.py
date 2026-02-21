@@ -1,27 +1,87 @@
 import os
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import json
+import asyncio
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, ContextTypes, ChatJoinRequestHandler
+from telegram.error import RetryAfter, NetworkError, TimedOut
 
-TOKEN = os.getenv("BOT_TOKEN")
+# ================= CONFIG =================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+USERS_FILE = "users.json"
+FILE_PATH = "/mnt/data/TASHAN_PANNEL.apk"  # Railway volume path
+BUTTON_URL = "https://t.me/kesehobhai"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FILE_PATH = os.path.join(BASE_DIR, "TASHAN PANNEL.apk")
+VIP_BUTTON = InlineKeyboardMarkup(
+    [[InlineKeyboardButton("Join Channel 🚀", url=BUTTON_URL)]]
+)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Send /apk to download file.")
+# ================= UTILITY =================
+def load_users():
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
 
-async def apk(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("Looking for file at:", FILE_PATH)
-    print("Files available:", os.listdir(BASE_DIR))
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
 
-    if os.path.exists(FILE_PATH):
-        await update.message.reply_document(document=open(FILE_PATH, "rb"))
-    else:
-        await update.message.reply_text("File not found ❌")
+def add_user(user):
+    users = load_users()
+    if user.id not in [u["id"] for u in users]:
+        users.append({
+            "id": user.id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "joined_at": datetime.now().isoformat()
+        })
+        save_users(users)
 
-app = ApplicationBuilder().token(TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("apk", apk))
+# ================= HANDLER =================
+async def join_request(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.chat_join_request.from_user
+    chat_id = update.chat_join_request.chat.id
 
-print("Bot started...")
-app.run_polling()
+    try:
+        # Approve join request
+        await context.bot.approve_chat_join_request(chat_id, user.id)
+
+        # Add user to JSON
+        add_user(user)
+
+        # Send welcome message
+        await context.bot.send_message(
+            chat_id=user.id,
+            text="🎉 Welcome!\n\nThanks for joining our channel.",
+            reply_markup=VIP_BUTTON
+        )
+
+        # Send APK if exists
+        if os.path.exists(FILE_PATH):
+            with open(FILE_PATH, "rb") as f:
+                await context.bot.send_document(
+                    chat_id=user.id,
+                    document=f,
+                    caption="Here is your file 👉",
+                    reply_markup=VIP_BUTTON
+                )
+
+        print(f"[{datetime.now()}] Approved: {user.id}")
+
+    except RetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+    except (NetworkError, TimedOut):
+        await asyncio.sleep(5)
+    except Exception as e:
+        print("Error:", e)
+
+# ================= MAIN =================
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(ChatJoinRequestHandler(join_request))
+    print("Bot is running...")
+    app.run_polling()
